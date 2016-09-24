@@ -1,0 +1,296 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Thu May 07 19:31:26 2015
+
+@author: Sardhendu_Mishra
+"""
+
+
+
+from __future__ import division
+import numpy as np
+import pandas as pd
+from collections import OrderedDict
+from time import time
+import csv
+from scipy.spatial import distance
+from scipy import *
+from scipy.sparse import * 
+from scipy.sparse.linalg import eigsh
+
+from create_dataset_oderpurchase_data import build_dataset_jaccard
+from create_dataset_oderpurchase_data import find_opportune_centroids
+from create_dataset_oderpurchase_data import cluster_k_means
+from create_dataset_oderpurchase_data import build_the_cluster
+from create_dataset_oderpurchase_data import cal_cost_function_distance
+
+
+
+t0=time()
+#=================== INITIALIZE THE PARAMETERS  ==============================#
+np.set_printoptions(precision=4)
+probability_thresh=0.7
+no_of_dim=d=500
+
+all_attributes={}
+
+'''
+all_attributes["PROD_LN_DESC"]=1
+all_attributes["LOB_DESC"]	=2
+all_attributes["Price"] 	=0
+all_attributes["Is_touch"]	=0
+all_attributes["Flippable_Monitor"]=0	
+all_attributes["disk_memory"]	=0
+all_attributes["Customer_age"]=0	
+all_attributes["Customer_gender"]=0	
+all_attributes["Product_type"]=2
+'''
+all_attributes["PROD_LN_DESC"]=2
+all_attributes["LOB_DESC"]	=0
+all_attributes["Price"] 	=1
+all_attributes["Is_touch"]	=2
+all_attributes["Flippable_Monitor"]=2	
+all_attributes["disk_memory"]	=2
+all_attributes["Customer_age"]=0	
+all_attributes["Customer_gender"]=2	
+all_attributes["Product_type"]=0
+
+inner_outer_cluster=0
+
+
+
+
+
+#==============================================================================
+#  LOAD THE CSV FILE FROM THE LOCAL DISK 
+#==============================================================================
+t1=time() 
+data_train=pd.DataFrame()
+
+# The below code, the else condition is stated for second run. The first run is doen on "data_orderpurchase_all.csv"
+# The output are stored in files with names clusters_1.csv, clusters_2.csv and similar.
+# The else condition get the data from the respective cluster file. 
+if inner_outer_cluster==0:
+    data_train = pd.read_csv('/home/sardendhu/Desktop/StudyHard/Machine_learning/Data_mining_and_analysis/\
+image_processing/Research_patent/model/data_orderpurchase_all.csv')#, index_col='Date', parse_dates=True)
+else:
+    data_train = pd.read_csv('/home/sardendhu/Desktop/StudyHard/Machine_learning/Data_mining_and_analysis/\
+image_processing/Research_patent/model/data_orderpurchase_all.csv')
+
+
+data_train_1=pd.DataFrame()
+
+for attribues_name, val in all_attributes.items():
+    print attribues_name, val
+    for i in range(0,val):    
+        print i
+        data_train_1[attribues_name+str(i)]=data_train[attribues_name]
+
+# Change the column name of the data_train
+data_train.columns = [i for i in range(0,data_train.shape[1])]
+data_train_1.columns = [i for i in range(0,data_train_1.shape[1])]
+
+
+# Replace each NaN with random data, show that they may not attribute to intersection
+#df_rand = pd.DataFrame(np.random.randn(data_train.shape[0],data_train.shape[1]))
+#data_train[pd.isnull(data_train)] = df_rand[pd.isnull(data_train)]
+
+
+
+# Prefix the column name to the data_train, for robust intersection
+data_train_cvt=data_train_1.copy()
+for i in data_train_cvt.columns:
+    data_train_cvt[i] = str(i) + ":" + data_train_cvt[i].astype(str)
+    
+    
+
+data_train_cvt=data_train_cvt.reset_index().values[:]  # 1 is give to exclude the line number
+tot_len=data_train_cvt.shape[1]-1
+
+print "training time:", round(time()-t0, 3), "s"
+print "training time:", round(time()-t1, 3), "s"
+
+
+
+
+
+#==============================================================================
+# create the similarity matrix
+#==============================================================================
+t1=time()
+
+flattened_upper_triangle_of_the_matrix=build_dataset_jaccard( probability_thresh,data_train_cvt, data_train_cvt.shape[1])
+matrix_for_cluster = distance.squareform(flattened_upper_triangle_of_the_matrix)
+# add a identity diagonal matrix to the matrix_for_cluster
+m,n=matrix_for_cluster.shape
+matrix_for_cluster += np.identity(m)
+
+print "training time:", round(time()-t0, 3), "s"
+print "training time:", round(time()-t1, 3), "s"
+
+#matrix_for_cluster[matrix_for_cluster < probability_thresh] = 0
+#graph = nx.Graph (matrix_for_cluster)
+
+'''
+np.savetxt("C:\\Users\\sardhendu_mishra\\Desktop\\StudyHard\\Machine_learning\\\
+Data mining and analysis\\image_processing\\Research_patent\\model\\\
+matrix_mushroom_optimized.csv",matrix_for_cluster, delimiter=',')                                          
+'''
+
+similarity_dict={}
+for i in range (0, len(matrix_for_cluster)):
+    x = np.where(matrix_for_cluster[i] > probability_thresh)
+    similarity_dict[i]=list(x[0])
+
+
+
+print "training time:", round(time()-t0, 3), "s"
+print "training time:", round(time()-t1, 3), "s"
+
+
+
+
+#==============================================================================
+# Feature scalling(Standarization) to the dataset (scale mean to 0)
+#==============================================================================
+from sklearn import preprocessing
+
+matrix_for_cluster = preprocessing.StandardScaler().fit_transform(matrix_for_cluster)
+
+print ('Lets see if the mean is scalled to 0 ', sum(matrix_for_cluster[:,0]))
+
+
+
+
+#==============================================================================
+#  Convert into compressed sparse matrix
+#==============================================================================
+t1=time()
+matrix_for_cluster=csr_matrix(matrix_for_cluster)
+print "training time:", round(time()-t0, 3), "s"
+print "training time:", round(time()-t1, 3), "s"
+
+
+
+
+
+
+#==============================================================================
+#  Perform Dimensional reduction
+#==============================================================================
+t1=time()
+
+'''Compute the eigen vectors and eigen values using ARPACK package'''
+evals_large, evecs_large = eigsh(matrix_for_cluster, d, which='LM')  
+# LM depicts eigen vectors for highest eigen values
+
+# We arrange all the eigen vectors into pairs with eigen value descending
+eig_pairs = [(np.abs(evals_large[j]), evecs_large[:,j]) for j in range(len(evals_large))]
+eig_pairs = sorted(eig_pairs, key=lambda k: k[0], reverse=True)
+
+
+# The below code test the contribution of % of each eige vectors
+#-----------------------------------------------------------------------------#
+tot_variance_retained=0
+eigv_sum = sum(evals_large)
+for i,j in enumerate(eig_pairs):
+    tot_variance_retained += (j[0]/eigv_sum).real
+    print('eigenvalue {0:}: {1:.2%}'.format(i+1, (j[0]/eigv_sum).real))
+    print tot_variance_retained
+#-----------------------------------------------------------------------------#
+
+
+# Collect only the eigen values for required dimensions
+A= np.hstack([eig_pairs[k][1].reshape(n,1) for k in range(0,d)]) 
+# create the transformed matrix   
+matrix_for_cluster = matrix_for_cluster.dot(A)
+#matrix_for_cluster = ((A.T).dot(matrix_for_cluster.todense().T)).T
+
+
+print "training time:", round(time()-t0, 3), "s"
+print "training time:", round(time()-t1, 3), "s"
+
+
+
+
+
+
+#==============================================================================
+#  FIND THE OPPORTUNE CENTROIDS
+#==============================================================================t1=time()
+# First we sort the dictionary 
+ordered_similarity_dict = OrderedDict(sorted(similarity_dict.viewitems(), key=lambda x: len(x[1])))
+
+'''
+##### STORE THE SIMILARITY DICTIONARY IN DISK AS CSV FORMAT 
+with open("C:\\Users\\sardhendu_mishra\\Desktop\\StudyHard\\Machine_learning\\Data mining and analysis\\image_processing\\Research_patent\\model\\similarity_dict_mushroom.csv", "wb") as f:  # Just use 'w' mode in 3.x    
+    w = csv.writer(f)
+    for key, value in similarity_dict.items():
+        w.writerow([key, value])
+f.close() 
+'''
+
+centroid_index,centroid_coordinates=find_opportune_centroids(ordered_similarity_dict.copy(),matrix_for_cluster)
+
+matrix_for_cluster=np.array(matrix_for_cluster, dtype="float64")
+centroid_index=np.array(centroid_index, dtype="int32")
+
+print "training time:", round(time()-t0, 3), "s"
+print "training time:", round(time()-t1, 3), "s"
+
+
+
+
+#==================  FIND THE BEST CENTROIDS  ================================#
+#centroids_best_ids,centroids_best_coordinates=find_best_centroids(centroids_ids,centroids_coordinates,cluster_number)
+ 
+
+#==============================================================================
+#   FIND THE K_MEANS AND BUILD THE CLUSTER  
+#==============================================================================
+labels, new_centroid_coordinates=cluster_k_means(centroid_index,centroid_coordinates.copy(),similarity_dict,matrix_for_cluster)
+cluster=build_the_cluster(labels, data_train)
+
+print "training time:", round(time()-t0, 3), "s"
+print "training time:", round(time()-t1, 3), "s"
+  
+'''
+#==============================================================================
+#  CALCULATE THE ERROR COST OF THE CHOSEN CENTROID 
+#==============================================================================#t1=time()
+#cost_by_distance=cal_cost_function_distance(labels,new_centroid_coordinates,matrix_for_cluster)
+
+
+#print cost_by_distance
+#print centroid_index
+
+#print "training time:", round(time()-t0, 3), "s"
+#print "training time:", round(time()-t1, 3), "s"
+'''
+
+
+#==============================================================================
+#  Load the clusters into an excel sheet 
+#==============================================================================
+if inner_outer_cluster==0:
+    for cluster_number in range(0,len(cluster)):
+        a=np.asarray(cluster[cluster_number])
+        np.savetxt("C:\Users\\sardhendu_mishra\\Desktop\\StudyHard\\Machine_learning\\\
+Data mining and analysis\\image_processing\\Research_patent\\model\\clusters\\orderpurchase_data\\\
+clusters_%i.csv" %cluster_number, a,delimiter=",", fmt="%s")
+else:
+    for cluster_number in range(0,len(cluster)):
+        a=np.asarray(cluster[cluster_number])
+        np.savetxt("C:\Users\\sardhendu_mishra\\Desktop\\StudyHard\\Machine_learning\\\
+Data mining and analysis\\image_processing\\Research_patent\\model\\clusters\\orderpurchase_data\\inner_cluster\\\
+clusters_%i.csv" %cluster_number, a,delimiter=",", fmt="%s")    
+
+
+
+
+#==============================================================================
+# Find elements in the cluster
+#==============================================================================
+cluster[0][:,10]
+
+df = pd.DataFrame({'R':cluster[0][:,0],'G':cluster[0][:,1],'B':cluster[0][:,2]})
